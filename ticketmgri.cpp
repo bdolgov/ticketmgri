@@ -188,21 +188,47 @@ struct aTicketintegrationGetBalance : public Action {
   bool IsModify(const Session &) const override { return false; }
 };
 
+string GetOpenTicket(const string &ticket) {
+  auto openTickets =
+      db->Query("SELECT id FROM ticket2user WHERE ticket=" + ticket +
+                " AND user IN (" + str::Join(allowedDepartments, ",") + ")");
+  if (openTickets->Eof()) {
+    throw mgr_err::Value("ticket");
+  }
+  return openTickets->AsString(0);
+}
+
 struct aTicketintegrationDeduct : public Action {
   aTicketintegrationDeduct()
       : Action("ticketintegration.deduct", MinLevel(lvAdmin)) {}
 
   void Execute(Session &ses) const override {
-    auto openTickets = db->Query("SELECT id FROM ticket2user WHERE ticket=" +
-                                 ses.Param("ticket") + " AND user IN (" +
-                                 str::Join(allowedDepartments, ",") + ")");
-    if (openTickets->Eof()) {
-      throw mgr_err::Value("ticket");
-    }
-    string elid = openTickets->AsString(0);
+    string elid = GetOpenTicket(ses.Param("ticket"));
     InternalCall(ses, "ticket.edit", "sok=ok&show_optional=on&elid=" + elid +
                                          "&ticket_expense=" +
                                          ses.Param("amount"));
+    ses.NewNode("ok");
+  }
+};
+
+struct aTicketintegrationSetDepartment : public Action {
+  aTicketintegrationSetDepartment()
+      : Action("ticketintegration.setdepartment", MinLevel(lvAdmin)) {}
+
+  void Execute(Session &ses) const override {
+    string ticket_id = ses.Param("elid");
+    string elid = GetOpenTicket(ticket_id);
+    string department = ses.Param("department");
+    InternalCall(ses, "support_tool_responsible",
+                 "sok=ok&set_responsible=d_" + department + "&elid=" + elid +
+                     "&plid=" + ticket_id + "&set_responsible_default=on");
+    if (std::find(allowedDepartments.begin(), allowedDepartments.end(),
+                  department) == allowedDepartments.end()) {
+      // openTicket must be closed for this user.
+      InternalCall(ses, "ticketintegration.post",
+                   "sok=ok&type=setstatus&status=closed&elid=" + ticket_id);
+    }
+    ses.NewNode("ok");
   }
 };
 
@@ -221,7 +247,7 @@ MODULE_INIT(ticketmgri, "") {
   str::Split(mgr_cf::GetParam("TicketmgrAllowedDepartments"), ",",
              allowedDepartments);
   if (allowedDepartments.empty()) {
-    allowedDepartments.push_back(0);
+    allowedDepartments.push_back("0");
   }
   str::Split(mgr_cf::GetParam("TicketmgrHideDepartments"), ",",
              hideDepartments);
@@ -235,4 +261,5 @@ MODULE_INIT(ticketmgri, "") {
   new aTicketintegrationPushTasks;
   new aTicketintegrationGetBalance;
   new aTicketintegrationDeduct;
+  new aTicketintegrationSetDepartment;
 }
